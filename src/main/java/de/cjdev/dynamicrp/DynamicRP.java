@@ -1,6 +1,7 @@
 package de.cjdev.dynamicrp;
 
 import com.sun.net.httpserver.HttpServer;
+import de.cjdev.dynamicrp.api.event.ZipPackEvent;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import org.bukkit.Bukkit;
@@ -19,13 +20,12 @@ import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.List;
-import java.util.jar.JarEntry;
-import java.util.jar.JarFile;
+import java.util.*;
+import java.util.function.Consumer;
 import java.util.logging.Logger;
+import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
 public final class DynamicRP extends JavaPlugin implements Listener {
@@ -36,6 +36,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
     private static String publicIP;
     private static final String resPackUrl = "http://%s:%s";
     private static File resPackFile;
+    private static File overrideFolder;
     private static String resPackHash;
 
     @Override
@@ -43,8 +44,10 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         LOGGER = getLogger();
 
         resPackFile = Path.of(getDataPath().toString(), "pack.zip").toFile();
+        overrideFolder = Path.of(getDataPath().toString(), "override").toFile();
 
         this.saveDefaultConfig();
+        overrideFolder.mkdirs();
 
         // Loading Config
         FileConfiguration config = getConfig();
@@ -184,7 +187,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
     /// Returns if the hash changed or not, or if it failed (false) ¯\_(ツ)_/¯
     public boolean zipPack() {
-        getDataFolder().mkdir();
+        getDataFolder().mkdirs();
         if (hasResourcePack()) {
             try {
                 resPackHash = calculateSHA1(resPackFile);
@@ -194,7 +197,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         }
 
         // Loading Assets
-        List<JarEntryData> entries = new ArrayList<>();
+        List<ZipEntryData> entries = new ArrayList<>();
 
         for (@NotNull Plugin plugin : Bukkit.getPluginManager().getPlugins()) {
             URL classUrl = plugin.getClass().getProtectionDomain().getCodeSource().getLocation();
@@ -203,25 +206,59 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
             String path = URLDecoder.decode(classUrl.getPath(), StandardCharsets.UTF_8).substring(1);
 
-            try (JarFile jarFile = new JarFile(Path.of(path).toFile())) {
-                Iterator<JarEntry> jarEntries = jarFile.entries().asIterator();
-                while (jarEntries.hasNext()) {
-                    JarEntry entry = jarEntries.next();
-
-                    if (!entry.getName().startsWith("assets/") || entry.isDirectory())
-                        continue;
-                    try (InputStream is = jarFile.getInputStream(entry)) {
-                        byte[] content = is.readAllBytes();
-                        entries.add(new JarEntryData(entry, content));
-                    }
-                }
+            try (ZipFile jarFile = new ZipFile(Path.of(path).toFile())) {
+                addAssetsFromZipEntries(entries::add, jarFile);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
         }
 
+        OVERRIDE_FOLDER:
+        {
+            File[] listFiles;
+            if (!overrideFolder.exists() || (listFiles = overrideFolder.listFiles()) == null)
+                break OVERRIDE_FOLDER;
+            for (File file : listFiles) {
+                if (!file.getName().endsWith(".zip"))
+                    continue;
+                try (ZipFile zipFile = new ZipFile(file)) {
+                    addAssetsFromZipEntries(entries::add, zipFile);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            }
+        }
+
+        ZipPackEvent zipPackEvent = new ZipPackEvent(entries::add);
+        zipPackEvent.callEvent();
+
+        // Add pack.mcmeta to the zip
+        byte[] packMCMetaData = "{\"pack\":{\"description\":\"\",\"pack_format\":46}}".getBytes(StandardCharsets.UTF_8);
+        CRC32 packMCMetaCrc = new CRC32();
+        packMCMetaCrc.update(packMCMetaData);
+        ZipEntry packMCMetaEntry = new ZipEntry("pack.mcmeta");
+        packMCMetaEntry.setTime(0);
+        packMCMetaEntry.setSize(packMCMetaData.length);
+        packMCMetaEntry.setMethod(ZipEntry.DEFLATED);
+        packMCMetaEntry.setCrc(packMCMetaCrc.getValue());
+        entries.add(new ZipEntryData(packMCMetaEntry, packMCMetaData));
+
+        // Set to store unique elements we have already seen
+        Set<String> seen = new HashSet<>();
+
+        // Iterate backwards through the list
+        for (int i = entries.size() - 1; i >= 0; i--) {
+            if (seen.contains(entries.get(i).entry.getName())) {
+                // Remove duplicate
+                entries.remove(i);
+            } else {
+                // Mark this element as seen
+                seen.add(entries.get(i).entry.getName());
+            }
+        }
+
         try (ZipOutputStream zos = new ZipOutputStream(new FileOutputStream(resPackFile))) {
-            for (JarEntryData entryData : entries) {
+            for (ZipEntryData entryData : entries) {
                 ZipEntry zipEntry = new ZipEntry(entryData.entry().getName());
                 zipEntry.setTime(entryData.entry.getTime());
                 zipEntry.setSize(entryData.entry.getSize());
@@ -229,15 +266,9 @@ public final class DynamicRP extends JavaPlugin implements Listener {
                 zipEntry.setComment(entryData.entry.getComment());
                 zipEntry.setCrc(entryData.entry.getCrc());
                 zos.putNextEntry(zipEntry);
-
                 zos.write(entryData.content());
                 zos.closeEntry();
             }
-            ZipEntry packMCMetaEntry = new ZipEntry("pack.mcmeta");
-            packMCMetaEntry.setTime(0);
-            zos.putNextEntry(packMCMetaEntry);
-            zos.write("{\"pack\":{\"description\":\"\",\"pack_format\":46}}".getBytes(StandardCharsets.UTF_8));
-            zos.closeEntry();
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
@@ -256,6 +287,19 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         return false;
     }
 
-    private record JarEntryData(JarEntry entry, byte[] content) {
+    public static void addAssetsFromZipEntries(Consumer<ZipEntryData> entryConsumer, ZipFile zipFile) throws IOException {
+        Enumeration<? extends ZipEntry> zipEntries = zipFile.entries();
+        while (zipEntries.hasMoreElements()) {
+            ZipEntry zipEntry = zipEntries.nextElement();
+            if (!zipEntry.getName().startsWith("assets/") || zipEntry.isDirectory())
+                continue;
+            try (InputStream is = zipFile.getInputStream(zipEntry)) {
+                byte[] content = is.readAllBytes();
+                entryConsumer.accept(new ZipEntryData(zipEntry, content));
+            }
+        }
+    }
+
+    public record ZipEntryData(ZipEntry entry, byte[] content) {
     }
 }
