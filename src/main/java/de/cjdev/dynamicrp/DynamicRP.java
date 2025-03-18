@@ -5,11 +5,13 @@ import de.cjdev.dynamicrp.api.event.ZipPackEvent;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import org.bukkit.Bukkit;
+import org.bukkit.NamespacedKey;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.persistence.PersistentDataType;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
@@ -21,6 +23,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 import java.util.zip.CRC32;
@@ -29,10 +33,12 @@ import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
 public final class DynamicRP extends JavaPlugin implements Listener {
+    private static DynamicRP plugin;
     public static Logger LOGGER;
 
     private static HttpServer httpServer;
     private static int webServerPort;
+    private static String localIP;
     private static String publicIP;
     private static final String resPackUrl = "http://%s:%s";
     private static File resPackFile;
@@ -41,6 +47,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
     @Override
     public void onEnable() {
+        plugin = this;
         LOGGER = getLogger();
 
         resPackFile = Path.of(getDataPath().toString(), "pack.zip").toFile();
@@ -60,21 +67,25 @@ public final class DynamicRP extends JavaPlugin implements Listener {
             @Override
             public void run() {
                 if (zipPack())
-                    refreshResourcePack();
+                    C_refreshResourcePack();
             }
-        }.runTask(this);
+        }.runTaskAsynchronously(this);
 
         // Starting Web Server
         StartWebServer();
 
         getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event -> event.registrar().register(Commands.literal("drp").requires(ctx -> ctx.getSender().isOp()).then(Commands.literal("zip").executes(ctx -> {
-            if (zipPack()) {
-                ctx.getSource().getSender().sendMessage("Updated Resource Pack");
-                refreshResourcePack();
-            } else {
-                ctx.getSource().getSender().sendMessage("Resource Pack up to date");
-            }
-
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    if (zipPack()) {
+                        ctx.getSource().getSender().sendMessage("Updated Resource Pack");
+                        C_refreshResourcePack();
+                    } else {
+                        ctx.getSource().getSender().sendMessage("Resource Pack up to date");
+                    }
+                }
+            }.runTaskAsynchronously(this);
             return 1;
         }).build()).build()));
     }
@@ -86,16 +97,34 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
+        boolean isLocal = false;
+        if (event.getPlayer().getAddress().getAddress().isLoopbackAddress()) {
+            LOGGER.warning(event.getPlayer().getName() + " is LOCAL!!");
+            isLocal = true;
+        }
+        event.getPlayer().getPersistentDataContainer().set(new NamespacedKey(this, "isLocal"), PersistentDataType.BOOLEAN, isLocal);
+
         refreshResourcePack(event.getPlayer());
     }
 
-    public static void refreshResourcePack(Player player) {
+    public void C_refreshResourcePack(Player player) {
         if (!hasResourcePack()) return;
-        player.setResourcePack(String.format(resPackUrl, publicIP, DynamicRP.webServerPort), DynamicRP.resPackHash, true);
+        boolean isLocal = Boolean.TRUE.equals(player.getPersistentDataContainer().get(new NamespacedKey(this, "isLocal"), PersistentDataType.BOOLEAN));
+        String ip = isLocal ? "127.0.0.1" : publicIP; // isLocal ? localIP : publicIP;
+        LOGGER.warning(ip);
+        player.setResourcePack(String.format(resPackUrl, ip, DynamicRP.webServerPort), DynamicRP.resPackHash, true);
+    }
+
+    public void refreshResourcePack(Player player){
+        plugin.C_refreshResourcePack(player);
+    }
+
+    public void C_refreshResourcePack() {
+        Bukkit.getOnlinePlayers().forEach(this::C_refreshResourcePack);
     }
 
     public static void refreshResourcePack() {
-        Bukkit.getOnlinePlayers().forEach(DynamicRP::refreshResourcePack);
+        plugin.C_refreshResourcePack();
     }
 
     private static boolean hasResourcePack() {
@@ -139,9 +168,40 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         }
     }
 
+    public static CompletableFuture<Void> callZipPackEventAsync(Consumer<ZipEntryData> consumer) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+
+        // Run the event on the main thread
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            ZipPackEvent zipPackEvent = new ZipPackEvent(consumer);
+            Bukkit.getPluginManager().callEvent(zipPackEvent);
+            future.complete(null);
+        });
+
+        return future;
+    }
+
     private void StartWebServer() {
         try {
             publicIP = getPublicIP();
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface networkInterface = interfaces.nextElement();
+
+                // Ignore loopback, down, or virtual interfaces
+                if (!networkInterface.isUp() || networkInterface.isLoopback() || networkInterface.isVirtual()) {
+                    continue;
+                }
+
+                Enumeration<InetAddress> enumerate = networkInterface.getInetAddresses();
+                while (enumerate.hasMoreElements()) {
+                    InetAddress address = enumerate.nextElement();
+                    if (address instanceof Inet4Address && address.isSiteLocalAddress()) {
+                        localIP = address.getHostAddress();
+                    }
+                }
+            }
+            LOGGER.warning(localIP);
 
             webServerPort = webServerPort < 0 || webServerPort > 65535 ? getFreePort() : webServerPort;
             httpServer = HttpServer.create(new InetSocketAddress(webServerPort), 0);
@@ -229,11 +289,14 @@ public final class DynamicRP extends JavaPlugin implements Listener {
             }
         }
 
-        ZipPackEvent zipPackEvent = new ZipPackEvent(entries::add);
-        zipPackEvent.callEvent();
+        try {
+            DynamicRP.callZipPackEventAsync(entries::add).get();
+        } catch (InterruptedException | ExecutionException e) {
+            LOGGER.warning(e.getMessage());
+        }
 
         // Add pack.mcmeta to the zip
-        byte[] packMCMetaData = "{\"pack\":{\"description\":\"\",\"pack_format\":46}}".getBytes(StandardCharsets.UTF_8);
+        byte[] packMCMetaData = "{\"pack\":{\"description\":\"\",\"pack_format\":46,\"supported_formats\":{\"max_inclusive\":55,\"min_inclusive\":42}}}".getBytes(StandardCharsets.UTF_8);
         CRC32 packMCMetaCrc = new CRC32();
         packMCMetaCrc.update(packMCMetaData);
         ZipEntry packMCMetaEntry = new ZipEntry("pack.mcmeta");

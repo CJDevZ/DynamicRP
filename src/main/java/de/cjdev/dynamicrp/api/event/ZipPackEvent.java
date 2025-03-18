@@ -6,6 +6,8 @@ import org.bukkit.event.HandlerList;
 import org.jetbrains.annotations.NotNull;
 
 import java.util.function.Consumer;
+import java.util.zip.CRC32;
+import java.util.zip.ZipEntry;
 
 public class ZipPackEvent extends Event implements Consumer<DynamicRP.ZipEntryData> {
     private static final HandlerList HANDLER_LIST = new HandlerList();
@@ -13,6 +15,18 @@ public class ZipPackEvent extends Event implements Consumer<DynamicRP.ZipEntryDa
 
     public ZipPackEvent(Consumer<DynamicRP.ZipEntryData> entryConsumer){
         this.entryConsumer = entryConsumer;
+    }
+
+    public void accept(String name, byte[] data) {
+        ZipEntry zipEntry = new ZipEntry(name);
+        zipEntry.setSize(data.length);
+        zipEntry.setMethod(ZipEntry.DEFLATED);
+
+        CRC32 crc32 = new CRC32();
+        crc32.update(data);
+        zipEntry.setCrc(crc32.getValue());
+
+        this.accept(new DynamicRP.ZipEntryData(zipEntry, data));
     }
 
     @Override

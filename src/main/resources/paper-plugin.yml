@@ -1,5 +1,5 @@
 name: DynamicRP
-version: '1.1'
+version: '1.2'
 main: de.cjdev.dynamicrp.DynamicRP
 api-version: '1.21'
 load: STARTUP
