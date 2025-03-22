@@ -21,6 +21,7 @@ import java.io.*;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -38,6 +39,8 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
     private static HttpServer httpServer;
     private static int webServerPort;
+    private static boolean customHost;
+    private static boolean rpRequired;
     private static String localIP;
     private static String publicIP;
     private static final String resPackUrl = "http://%s:%s";
@@ -58,7 +61,9 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
         // Loading Config
         FileConfiguration config = getConfig();
+        customHost = config.getBoolean("custom-host");
         webServerPort = config.getInt("webserver.port");
+        rpRequired = config.getBoolean("required");
 
         Bukkit.getPluginManager().registerEvents(this, this);
 
@@ -71,8 +76,10 @@ public final class DynamicRP extends JavaPlugin implements Listener {
             }
         }.runTaskAsynchronously(this);
 
-        // Starting Web Server
-        StartWebServer();
+        if (!customHost) {
+            // Starting Web Server
+            StartWebServer();
+        }
 
         getLifecycleManager().registerEventHandler(LifecycleEvents.COMMANDS, event -> event.registrar().register(Commands.literal("drp").requires(ctx -> ctx.getSender().isOp()).then(Commands.literal("zip").executes(ctx -> {
             new BukkitRunnable() {
@@ -98,8 +105,9 @@ public final class DynamicRP extends JavaPlugin implements Listener {
     @EventHandler
     public void onPlayerJoin(PlayerJoinEvent event) {
         boolean isLocal = false;
-        if (event.getPlayer().getAddress().getAddress().isLoopbackAddress()) {
-            LOGGER.warning(event.getPlayer().getName() + " is LOCAL!!");
+        InetAddress address = event.getPlayer().getAddress().getAddress();
+        if (address.isLoopbackAddress()) {
+            //LOGGER.warning(event.getPlayer().getName() + " is LOCAL!!");
             isLocal = true;
         }
         event.getPlayer().getPersistentDataContainer().set(new NamespacedKey(this, "isLocal"), PersistentDataType.BOOLEAN, isLocal);
@@ -111,8 +119,8 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         if (!hasResourcePack()) return;
         boolean isLocal = Boolean.TRUE.equals(player.getPersistentDataContainer().get(new NamespacedKey(this, "isLocal"), PersistentDataType.BOOLEAN));
         String ip = isLocal ? "127.0.0.1" : publicIP; // isLocal ? localIP : publicIP;
-        LOGGER.warning(ip);
-        player.setResourcePack(String.format(resPackUrl, ip, DynamicRP.webServerPort), DynamicRP.resPackHash, true);
+        //LOGGER.warning(ip);
+        player.setResourcePack(String.format(resPackUrl, ip, DynamicRP.webServerPort), DynamicRP.resPackHash, rpRequired);
     }
 
     public void refreshResourcePack(Player player){
@@ -201,7 +209,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
                     }
                 }
             }
-            LOGGER.warning(localIP);
+            //LOGGER.warning(localIP);
 
             webServerPort = webServerPort < 0 || webServerPort > 65535 ? getFreePort() : webServerPort;
             httpServer = HttpServer.create(new InetSocketAddress(webServerPort), 0);
@@ -264,12 +272,14 @@ public final class DynamicRP extends JavaPlugin implements Listener {
             if (classUrl == null)
                 continue;
 
-            String path = URLDecoder.decode(classUrl.getPath(), StandardCharsets.UTF_8).substring(1);
+            try {
+                Path path = Paths.get(classUrl.toURI());
 
-            try (ZipFile jarFile = new ZipFile(Path.of(path).toFile())) {
+                ZipFile jarFile = new ZipFile(path.toFile());
                 addAssetsFromZipEntries(entries::add, jarFile);
+            } catch (URISyntaxException ignored) {
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                LOGGER.warning(e.getMessage());
             }
         }
 

@@ -1,2 +1,9 @@
+custom-host: false
 webserver:
   port: -1
+required: true
+
+CUSTOM:
+  upload: https://insertapi.com/upload
+  download: http://insertapi.com/upload/%s
+  auth: XXXX-XXXX-XXXX-XXXX
