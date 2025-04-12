@@ -49,6 +49,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
     private static boolean customHost;
     private static boolean rpRequired;
     private static String hostName;
+    private static boolean useHostName;
     private static String localIP;
     private static String publicIP;
     private static final String resPackUrl = "http://%s:%s";
@@ -151,6 +152,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         webServerPort = config.getInt("webserver.port");
         rpRequired = config.getBoolean("required");
         hostName = config.getString("hostName");
+        useHostName = hostName != null && !hostName.equals("0.0.0.0");
 
         Bukkit.getPluginManager().registerEvents(this, this);
 
@@ -221,7 +223,12 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
         public PlayerResourcePack forPlayer(@NotNull UUID uuid, boolean local) {
             this.uuid = uuid;
-            return local ? forLocal() : forPublic();
+            return !useHostName ? (local ? forLocal() : forPublic()) : forHostName();
+        }
+
+        public PlayerResourcePack forHostName() {
+            this.uri = URI.create(resPackUrl.formatted(hostName, webServerPort)).resolve("?uuid=" + uuid.toString());
+            return this;
         }
 
         public PlayerResourcePack forLocal() {
@@ -264,7 +271,12 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         }
 
         public ResourcePack forPlayer(boolean local) {
-            return local ? forLocal() : forPublic();
+            return !useHostName ? (local ? forLocal() : forPublic()) : forHostName();
+        }
+
+        public ResourcePack forHostName() {
+            this.uri = URI.create(resPackUrl.formatted(hostName, webServerPort));
+            return this;
         }
 
         public ResourcePack forLocal() {
@@ -290,8 +302,6 @@ public final class DynamicRP extends JavaPlugin implements Listener {
     public void C_refreshResourcePack(Player player) {
         if (!hasResourcePack()) return;
         boolean isLocal = Boolean.TRUE.equals(player.getPersistentDataContainer().get(new NamespacedKey(this, "isLocal"), PersistentDataType.BOOLEAN));
-        String ip = hostName == null || hostName.equals("0.0.0.0") ? (isLocal ? "127.0.0.1" : publicIP) : hostName; // isLocal ? localIP : publicIP;
-        //LOGGER.warning(ip);
         packRequest.setPlayer(player.getUniqueId(), isLocal);
         player.sendResourcePacks(packRequest);
     }
