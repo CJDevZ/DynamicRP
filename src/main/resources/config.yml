@@ -1,6 +1,7 @@
 webserver:
   port: -1
 required: true
+hostName: 0.0.0.0
 
 # Not implemented
 #custom-host: false

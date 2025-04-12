@@ -48,6 +48,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
     private static int webServerPort;
     private static boolean customHost;
     private static boolean rpRequired;
+    private static String hostName;
     private static String localIP;
     private static String publicIP;
     private static final String resPackUrl = "http://%s:%s";
@@ -149,6 +150,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         customHost = config.getBoolean("custom-host");
         webServerPort = config.getInt("webserver.port");
         rpRequired = config.getBoolean("required");
+        hostName = config.getString("hostName");
 
         Bukkit.getPluginManager().registerEvents(this, this);
 
@@ -188,9 +190,10 @@ public final class DynamicRP extends JavaPlugin implements Listener {
     }
 
     @EventHandler
-    public void onPlayerJoin(PlayerJoinEvent event) {
+    public void onPlayerJoin(PlayerJoinEvent event) throws UnknownHostException, SocketException {
         boolean isLocal = false;
         InetAddress address = event.getPlayer().getAddress().getAddress();
+
         if (address.isLoopbackAddress()) {
             //LOGGER.warning(event.getPlayer().getName() + " is LOCAL!!");
             isLocal = true;
@@ -287,7 +290,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
     public void C_refreshResourcePack(Player player) {
         if (!hasResourcePack()) return;
         boolean isLocal = Boolean.TRUE.equals(player.getPersistentDataContainer().get(new NamespacedKey(this, "isLocal"), PersistentDataType.BOOLEAN));
-        String ip = isLocal ? "127.0.0.1" : publicIP; // isLocal ? localIP : publicIP;
+        String ip = hostName == null ? (isLocal ? "127.0.0.1" : publicIP) : hostName; // isLocal ? localIP : publicIP;
         //LOGGER.warning(ip);
         packRequest.setPlayer(player.getUniqueId(), isLocal);
         player.sendResourcePacks(packRequest);
@@ -398,7 +401,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
             //LOGGER.warning(localIP);
 
             webServerPort = webServerPort < 0 || webServerPort > 65535 ? getFreePort() : webServerPort;
-            httpServer = HttpServer.create(new InetSocketAddress(webServerPort), 0);
+            httpServer = HttpServer.create(new InetSocketAddress(hostName, webServerPort), 0);
 
             httpServer.createContext("/", new RequestHandler());
 
