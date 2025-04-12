@@ -290,7 +290,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
     public void C_refreshResourcePack(Player player) {
         if (!hasResourcePack()) return;
         boolean isLocal = Boolean.TRUE.equals(player.getPersistentDataContainer().get(new NamespacedKey(this, "isLocal"), PersistentDataType.BOOLEAN));
-        String ip = hostName == null ? (isLocal ? "127.0.0.1" : publicIP) : hostName; // isLocal ? localIP : publicIP;
+        String ip = hostName == null || hostName.equals("0.0.0.0") ? (isLocal ? "127.0.0.1" : publicIP) : hostName; // isLocal ? localIP : publicIP;
         //LOGGER.warning(ip);
         packRequest.setPlayer(player.getUniqueId(), isLocal);
         player.sendResourcePacks(packRequest);
