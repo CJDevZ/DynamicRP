@@ -4,7 +4,8 @@ import com.destroystokyo.paper.profile.PlayerProfile;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
-import de.cjdev.dynamicrp.api.event.ZipPackEvent;
+import de.cjdev.dynamicrp.api.PackConsumer;
+import de.cjdev.dynamicrp.api.ZipPackCallback;
 import io.papermc.paper.command.brigadier.Commands;
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents;
 import net.kyori.adventure.resource.ResourcePackCallback;
@@ -61,6 +62,8 @@ public final class DynamicRP extends JavaPlugin implements Listener {
     private static final byte[] playerResourcesLogo;
     private static ResourcePack resourcePack;
     private static final PlayerResourcePack playerResourcePack;
+
+    public static final List<ZipPackCallback> ZIP_PACK_CALLBACKS;
 
     static class PackRequest implements ResourcePackRequest {
         private ResourcePackCallback callback = ResourcePackCallback.noOp();
@@ -375,19 +378,6 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         }
     }
 
-    public static CompletableFuture<Void> callZipPackEventAsync(Consumer<ZipEntryData> consumer) {
-        CompletableFuture<Void> future = new CompletableFuture<>();
-
-        // Run the event on the main thread
-        Bukkit.getScheduler().runTask(plugin, () -> {
-            ZipPackEvent zipPackEvent = new ZipPackEvent(consumer);
-            Bukkit.getPluginManager().callEvent(zipPackEvent);
-            future.complete(null);
-        });
-
-        return future;
-    }
-
     private void StartWebServer() {
         try {
             publicIP = getPublicIP();
@@ -614,10 +604,9 @@ public final class DynamicRP extends JavaPlugin implements Listener {
             }
         }
 
-        try {
-            DynamicRP.callZipPackEventAsync(entries::add).get();
-        } catch (InterruptedException | ExecutionException e) {
-            LOGGER.warning(e.getMessage());
+        PackConsumer packConsumer = new PackConsumer(entries::add);
+        for (ZipPackCallback zipPackCallback : ZIP_PACK_CALLBACKS) {
+            zipPackCallback.callback(packConsumer);
         }
 
         // Add pack.mcmeta to the zip
@@ -705,6 +694,6 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
         resourcePack = new ResourcePack();
         playerResourcePack = new PlayerResourcePack();
-
+        ZIP_PACK_CALLBACKS = new ArrayList<>();
     }
 }
