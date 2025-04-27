@@ -29,7 +29,6 @@ repositories {
 dependencies {
     paperweight.paperDevBundle("1.21.4-R0.1-SNAPSHOT")
     compileOnly("io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT")
-    implementation('io.undertow:undertow-core:2.3.17.Final')
 }
 
 def targetJavaVersion = 21
@@ -52,6 +51,7 @@ tasks.withType(JavaCompile).configureEach {
 
 jar {
     destinationDirectory.set(file("C:/Minecraft Servers/Paper Plugin Test Server/plugins"))
+    archiveFileName = "${getArchiveBaseName().get()}-${getArchiveVersion().get()}+${project.minecraft_version}.${getArchiveExtension().get()}"
 }
 
 processResources {

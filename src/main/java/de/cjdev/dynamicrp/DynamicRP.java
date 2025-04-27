@@ -35,8 +35,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.MessageDigest;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
 import java.util.function.Consumer;
 import java.util.logging.Logger;
 import java.util.zip.*;
@@ -47,7 +45,6 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
     private static HttpServer httpServer;
     private static int webServerPort;
-    private static boolean customHost;
     private static boolean rpRequired;
     private static String hostName;
     private static boolean useHostName;
@@ -60,7 +57,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
     public static Optional<Component> prompt = Optional.empty();
     private static final byte[] steveSkin;
     private static final byte[] playerResourcesLogo;
-    private static ResourcePack resourcePack;
+    private static final ResourcePack resourcePack;
     private static final PlayerResourcePack playerResourcePack;
 
     public static final List<ZipPackCallback> ZIP_PACK_CALLBACKS;
@@ -151,7 +148,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
         // Loading Config
         FileConfiguration config = getConfig();
-        customHost = config.getBoolean("custom-host");
+        boolean customHost = config.getBoolean("custom-host");
         webServerPort = config.getInt("webserver.port");
         rpRequired = config.getBoolean("required");
         hostName = config.getString("hostName");
@@ -407,6 +404,8 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
             httpServer.start();
             LOGGER.info("\u001B[38;2;85;255;85mStarted Web Server on %s\u001B[0m".formatted(httpServer.getAddress().getPort()));
+        } catch (BindException e) {
+            LOGGER.warning("\u001B[38;2;255;85;85mAddress already in use. Restart the Server after Fix\u001B[0m");
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
