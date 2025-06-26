@@ -1,6 +1,5 @@
 plugins {
     id 'java'
-    id("io.papermc.paperweight.userdev") version "2.0.0-beta.11"
 }
 
 group = 'de.cjdev'
@@ -27,8 +26,7 @@ repositories {
 */
 
 dependencies {
-    paperweight.paperDevBundle("1.21.4-R0.1-SNAPSHOT")
-    compileOnly("io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT")
+    compileOnly("io.papermc.paper:paper-api:${minecraft_version}-R0.1-SNAPSHOT")
 }
 
 def targetJavaVersion = 21
@@ -51,7 +49,6 @@ tasks.withType(JavaCompile).configureEach {
 
 jar {
     destinationDirectory.set(file("C:/Minecraft Servers/Paper Plugin Test Server/plugins"))
-    archiveFileName = "${getArchiveBaseName().get()}-${getArchiveVersion().get()}+${project.minecraft_version}.${getArchiveExtension().get()}"
 }
 
 processResources {

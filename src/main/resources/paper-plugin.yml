@@ -1,5 +1,5 @@
 name: DynamicRP
-version: '1.2.1'
+version: "${version}"
 main: de.cjdev.dynamicrp.DynamicRP
 api-version: '1.21'
 load: STARTUP

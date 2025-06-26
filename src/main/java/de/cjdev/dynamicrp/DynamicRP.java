@@ -1,6 +1,7 @@
 package de.cjdev.dynamicrp;
 
 import com.destroystokyo.paper.profile.PlayerProfile;
+import com.google.gson.*;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -29,6 +30,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.*;
+import java.lang.reflect.Type;
 import java.net.*;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -54,11 +56,13 @@ public final class DynamicRP extends JavaPlugin implements Listener {
     private static File resPackFile;
     private static File overrideFolder;
     private static String resPackHash;
-    public static Optional<Component> prompt = Optional.empty();
+    public static Component prompt = null;
     private static final byte[] steveSkin;
     private static final byte[] playerResourcesLogo;
     private static final ResourcePack resourcePack;
     private static final PlayerResourcePack playerResourcePack;
+    private static final Gson GSON;
+    private static final byte[][] arms;
 
     public static final List<ZipPackCallback> ZIP_PACK_CALLBACKS;
 
@@ -129,7 +133,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
         @Override
         public @Nullable Component prompt() {
-            return prompt.orElse(null);
+            return prompt;
         }
     }
 
@@ -191,15 +195,58 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         StopWebServer();
     }
 
-    @EventHandler
-    public void onPlayerJoin(PlayerJoinEvent event) throws UnknownHostException, SocketException {
-        boolean isLocal = false;
-        InetAddress address = event.getPlayer().getAddress().getAddress();
+    private boolean isLocalNetwork(InetAddress clientAddress) {
+        if (clientAddress.isLoopbackAddress()) return true;
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
 
-        if (address.isLoopbackAddress()) {
-            //LOGGER.warning(event.getPlayer().getName() + " is LOCAL!!");
-            isLocal = true;
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface nextElement = interfaces.nextElement();
+
+                if (!nextElement.isUp() || nextElement.isLoopback()) continue;
+
+                for (InterfaceAddress interfaceAddress : nextElement.getInterfaceAddresses()) {
+                    InetAddress localAddress = interfaceAddress.getAddress();
+                    int prefix = interfaceAddress.getNetworkPrefixLength();
+
+                    if (clientAddress.getClass() != localAddress.getClass()) continue;
+                    if (prefix <= 0 || prefix > (clientAddress instanceof Inet4Address ? 32 : 128)) continue;
+
+                    byte[] clientBytes = clientAddress.getAddress();
+                    byte[] localBytes = localAddress.getAddress();
+
+                    if (isSameSubnet(clientBytes, localBytes, prefix)) return true;
+                }
+            }
+        } catch (SocketException e) {
+            throw new RuntimeException(e);
         }
+
+        return false;
+    }
+
+    private boolean isSameSubnet(byte[] ip1, byte[] ip2, int prefixLength) {
+        int byteCount = prefixLength / 8;
+        int bitRemainder = prefixLength % 8;
+
+        for (int i = 0; i < byteCount; i++) {
+            if (ip1[i] != ip2[i]) return false;
+        }
+
+        if (bitRemainder > 0) {
+            int mask = (0xFF << (8 - bitRemainder)) & 0xFF;
+            return (ip1[byteCount] & mask) == (ip2[byteCount] & mask);
+        }
+
+        return true;
+    }
+
+    @EventHandler
+    public void onPlayerJoin(PlayerJoinEvent event) {
+        InetAddress address = event.getPlayer().getAddress().getAddress();
+        boolean isLocal = isLocalNetwork(address);
+
+        //LOGGER.warning(event.getPlayer().getName() + " is " + isLocal);
         event.getPlayer().getPersistentDataContainer().set(new NamespacedKey(this, "isLocal"), PersistentDataType.BOOLEAN, isLocal);
 
         refreshResourcePack(event.getPlayer());
@@ -355,7 +402,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
     }
 
     private static String getPublicIP() throws IOException {
-        URL url = new URL("https://checkip.amazonaws.com/");
+        URL url = URI.create("https://checkip.amazonaws.com/").toURL();
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
         connection.setRequestMethod("GET");
 
@@ -418,7 +465,6 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
             URI requestURI = exchange.getRequestURI(); // ?file=UntitledGunPlugin
             Map<String, String> queryParams = queryToMap(requestURI.getQuery());
-            File resourcePack;
             String uuid = queryParams.get("uuid");
             if (uuid != null) {
                 Player player;
@@ -498,22 +544,16 @@ public final class DynamicRP extends JavaPlugin implements Listener {
     }
 
     public static void addPlayerResources(Player player, ByteArrayOutputStream outputStream) throws IOException {
-        byte[] packMCMetaData = "{\"pack\":{\"description\":\"Player Resources\",\"pack_format\":46,\"supported_formats\":{\"max_inclusive\":55,\"min_inclusive\":42}}}".getBytes(StandardCharsets.UTF_8);
+        byte[] packMCMetaData = "{\"pack\":{\"description\":\"Player Resources\",\"pack_format\":46,\"supported_formats\":{\"max_inclusive\":100,\"min_inclusive\":42}}}".getBytes(StandardCharsets.UTF_8);
 
         try (ZipOutputStream zos = new ZipOutputStream(outputStream)) {
             WriteBytesToZip(zos, "pack.mcmeta", packMCMetaData);
             try {
                 PlayerProfile profile = player.getPlayerProfile();
                 PlayerTextures textures = profile.getTextures();
-                byte[] leftArm;
-                byte[] rightArm;
-                if (textures.getSkinModel() == PlayerTextures.SkinModel.CLASSIC) {
-                    leftArm = "{\"texture_size\":[64,64],\"textures\":{\"skin\":\"dynamicrp:item/skin\"},\"elements\":[{\"from\":[4.999,7.999,5.999],\"to\":[9.001,20.001,10.001],\"rotation\":{\"angle\":0,\"axis\":\"y\",\"origin\":[8,8,8]},\"faces\":{\"north\":{\"uv\":[9,13,10,16],\"texture\":\"#skin\"},\"east\":{\"uv\":[8,13,9,16],\"texture\":\"#skin\"},\"south\":{\"uv\":[11,13,12,16],\"texture\":\"#skin\"},\"west\":{\"uv\":[10,13,11,16],\"texture\":\"#skin\"},\"up\":{\"uv\":[10,13,9,12],\"texture\":\"#skin\"},\"down\":{\"uv\":[11,12,10,13],\"texture\":\"#skin\"}}},{\"from\":[4.749,7.749,5.749],\"to\":[9.251,20.251,10.251],\"rotation\":{\"angle\":0,\"axis\":\"y\",\"origin\":[8,8,8]},\"faces\":{\"north\":{\"uv\":[13,13,14,16],\"texture\":\"#skin\"},\"east\":{\"uv\":[12,13,13,16],\"texture\":\"#skin\"},\"south\":{\"uv\":[15,13,16,16],\"texture\":\"#skin\"},\"west\":{\"uv\":[14,13,15,16],\"texture\":\"#skin\"},\"up\":{\"uv\":[14,13,13,12],\"texture\":\"#skin\"},\"down\":{\"uv\":[15,12,14,13],\"texture\":\"#skin\"}}},{\"from\":[9.243,20.251,10.251],\"to\":[4.741,7.749,5.749],\"rotation\":{\"angle\":0,\"axis\":\"z\",\"origin\":[8,8,8]},\"faces\":{\"north\":{\"uv\":[16,13,15,16],\"rotation\":180,\"texture\":\"#skin\"},\"east\":{\"uv\":[15,13,14,16],\"rotation\":180,\"texture\":\"#skin\"},\"south\":{\"uv\":[14,13,13,16],\"rotation\":180,\"texture\":\"#skin\"},\"west\":{\"uv\":[13,13,12,16],\"rotation\":180,\"texture\":\"#skin\"},\"up\":{\"uv\":[14,12,15,13],\"texture\":\"#skin\"},\"down\":{\"uv\":[13,13,14,12],\"texture\":\"#skin\"}}}]}".getBytes(StandardCharsets.UTF_8);
-                    rightArm = "{\"texture_size\":[64,64],\"textures\":{\"skin\":\"dynamicrp:item/skin\"},\"elements\":[{\"from\":[6.999,7.999,5.999],\"to\":[11.001,20.001,10.001],\"rotation\":{\"angle\":0,\"axis\":\"y\",\"origin\":[8,8,8]},\"faces\":{\"north\":{\"uv\":[11,5,12,8],\"texture\":\"#skin\"},\"east\":{\"uv\":[10,5,11,8],\"texture\":\"#skin\"},\"south\":{\"uv\":[13,5,14,8],\"texture\":\"#skin\"},\"west\":{\"uv\":[12,5,13,8],\"texture\":\"#skin\"},\"up\":{\"uv\":[12,5,11,4],\"texture\":\"#skin\"},\"down\":{\"uv\":[13,4,12,5],\"texture\":\"#skin\"}}},{\"from\":[6.749,7.749,5.749],\"to\":[11.251,20.251,10.251],\"rotation\":{\"angle\":0,\"axis\":\"y\",\"origin\":[8,8,8]},\"faces\":{\"north\":{\"uv\":[11,9,12,12],\"texture\":\"#skin\"},\"east\":{\"uv\":[10,9,11,12],\"texture\":\"#skin\"},\"south\":{\"uv\":[13,9,14,12],\"texture\":\"#skin\"},\"west\":{\"uv\":[12,9,13,12],\"texture\":\"#skin\"},\"up\":{\"uv\":[12,9,11,8],\"texture\":\"#skin\"},\"down\":{\"uv\":[13,8,12,9],\"texture\":\"#skin\"}}},{\"from\":[11.243,20.251,10.251],\"to\":[6.741,7.749,5.749],\"rotation\":{\"angle\":0,\"axis\":\"z\",\"origin\":[24,8,8]},\"faces\":{\"north\":{\"uv\":[14,9,13,12],\"rotation\":180,\"texture\":\"#skin\"},\"east\":{\"uv\":[13,9,12,12],\"rotation\":180,\"texture\":\"#skin\"},\"south\":{\"uv\":[12,9,11,12],\"rotation\":180,\"texture\":\"#skin\"},\"west\":{\"uv\":[11,9,10,12],\"rotation\":180,\"texture\":\"#skin\"},\"up\":{\"uv\":[12,8,13,9],\"texture\":\"#skin\"},\"down\":{\"uv\":[11,9,12,8],\"texture\":\"#skin\"}}}]}".getBytes(StandardCharsets.UTF_8);
-                } else {
-                    leftArm = "{\"texture_size\":[64,64],\"textures\":{\"skin\":\"dynamicrp:item/skin\"},\"elements\":[{\"from\":[5.999,7.999,5.999],\"to\":[9.001,20.001,10.001],\"rotation\":{\"angle\":0,\"axis\":\"y\",\"origin\":[8,8,8]},\"faces\":{\"north\":{\"uv\":[9,13,9.75,16],\"texture\":\"#skin\"},\"east\":{\"uv\":[8,13,9,16],\"texture\":\"#skin\"},\"south\":{\"uv\":[10.75,13,11.5,16],\"texture\":\"#skin\"},\"west\":{\"uv\":[9.75,13,10.75,16],\"texture\":\"#skin\"},\"up\":{\"uv\":[9.75,13,9,12],\"texture\":\"#skin\"},\"down\":{\"uv\":[10.5,12,9.75,13],\"texture\":\"#skin\"}}},{\"from\":[5.749,7.749,5.749],\"to\":[9.251,20.251,10.251],\"rotation\":{\"angle\":0,\"axis\":\"y\",\"origin\":[8,8,8]},\"faces\":{\"north\":{\"uv\":[13,13,13.75,16],\"texture\":\"#skin\"},\"east\":{\"uv\":[12,13,13,16],\"texture\":\"#skin\"},\"south\":{\"uv\":[14.75,13,15.5,16],\"texture\":\"#skin\"},\"west\":{\"uv\":[13.75,13,14.75,16],\"texture\":\"#skin\"},\"up\":{\"uv\":[13.75,13,13,12],\"texture\":\"#skin\"},\"down\":{\"uv\":[14.5,12,13.75,13],\"texture\":\"#skin\"}}},{\"from\":[9.239,20.251,10.251],\"to\":[5.737,7.749,5.749],\"rotation\":{\"angle\":0,\"axis\":\"z\",\"origin\":[16,8,8]},\"faces\":{\"north\":{\"uv\":[15.5,13,14.75,16],\"rotation\":180,\"texture\":\"#skin\"},\"east\":{\"uv\":[14.75,13,13.75,16],\"rotation\":180,\"texture\":\"#skin\"},\"south\":{\"uv\":[13.75,13,13,16],\"rotation\":180,\"texture\":\"#skin\"},\"west\":{\"uv\":[13,13,12,16],\"rotation\":180,\"texture\":\"#skin\"},\"up\":{\"uv\":[13.75,12,14.5,13],\"texture\":\"#skin\"},\"down\":{\"uv\":[13,13,13.75,12],\"texture\":\"#skin\"}}}]}".getBytes(StandardCharsets.UTF_8);
-                    rightArm = "{\"texture_size\":[64,64],\"textures\":{\"skin\":\"dynamicrp:item/skin\"},\"elements\":[{\"from\":[6.999,7.999,5.999],\"to\":[10.001,20.001,10.001],\"rotation\":{\"angle\":0,\"axis\":\"y\",\"origin\":[8,8,8]},\"faces\":{\"north\":{\"uv\":[11,5,11.75,8],\"texture\":\"#skin\"},\"east\":{\"uv\":[10,5,11,8],\"texture\":\"#skin\"},\"south\":{\"uv\":[12.75,5,13.5,8],\"texture\":\"#skin\"},\"west\":{\"uv\":[11.75,5,12.75,8],\"texture\":\"#skin\"},\"up\":{\"uv\":[11.75,5,11,4],\"texture\":\"#skin\"},\"down\":{\"uv\":[12.5,4,11.75,5],\"texture\":\"#skin\"}}},{\"from\":[6.749,7.749,5.749],\"to\":[10.251,20.251,10.251],\"rotation\":{\"angle\":0,\"axis\":\"y\",\"origin\":[8,8,8]},\"faces\":{\"north\":{\"uv\":[11,9,11.75,12],\"texture\":\"#skin\"},\"east\":{\"uv\":[10,9,11,12],\"texture\":\"#skin\"},\"south\":{\"uv\":[12.75,9,13.5,12],\"texture\":\"#skin\"},\"west\":{\"uv\":[11.75,9,12.75,12],\"texture\":\"#skin\"},\"up\":{\"uv\":[11.75,9,11,8],\"texture\":\"#skin\"},\"down\":{\"uv\":[12.5,8,11.75,9],\"texture\":\"#skin\"}}},{\"from\":[10.247,20.251,10.251],\"to\":[6.745,7.749,5.749],\"rotation\":{\"angle\":0,\"axis\":\"z\",\"origin\":[15,8,8]},\"faces\":{\"north\":{\"uv\":[13.5,9,12.75,12],\"rotation\":180,\"texture\":\"#skin\"},\"east\":{\"uv\":[12.75,9,11.75,12],\"rotation\":180,\"texture\":\"#skin\"},\"south\":{\"uv\":[11.75,9,11,12],\"rotation\":180,\"texture\":\"#skin\"},\"west\":{\"uv\":[11,9,10,12],\"rotation\":180,\"texture\":\"#skin\"},\"up\":{\"uv\":[11.75,8,12.5,9],\"texture\":\"#skin\"},\"down\":{\"uv\":[11,9,11.75,8],\"texture\":\"#skin\"}}}]}".getBytes(StandardCharsets.UTF_8);
-                }
+                int variant = textures.getSkinModel() == PlayerTextures.SkinModel.SLIM ? 1 : 0;
+                byte[] leftArm = arms[variant];
+                byte[] rightArm = arms[variant+2];
 
                 URL skinURL = textures.getSkin();
                 if (skinURL != null) {
@@ -570,6 +610,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
 
         // Loading Assets
         List<ZipEntryData> entries = new ArrayList<>();
+        List<PackMCMeta.Overlays.Entry> overlays = new ArrayList<>();
 
         for (@NotNull Plugin plugin : Bukkit.getPluginManager().getPlugins()) {
             URL classUrl = plugin.getClass().getProtectionDomain().getCodeSource().getLocation();
@@ -580,7 +621,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
                 Path path = Paths.get(classUrl.toURI());
 
                 ZipFile jarFile = new ZipFile(path.toFile());
-                addAssetsFromZipEntries(entries::add, jarFile);
+                addAssetsFromZipEntries(entries::add, overlays::add, jarFile);
             } catch (URISyntaxException ignored) {
             } catch (IOException e) {
                 LOGGER.warning(e.getMessage());
@@ -596,7 +637,7 @@ public final class DynamicRP extends JavaPlugin implements Listener {
                 if (!file.getName().endsWith(".zip"))
                     continue;
                 try (ZipFile zipFile = new ZipFile(file)) {
-                    addAssetsFromZipEntries(entries::add, zipFile);
+                    addAssetsFromZipEntries(entries::add, overlays::add, zipFile);
                 } catch (IOException e) {
                     throw new RuntimeException(e);
                 }
@@ -609,15 +650,9 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         }
 
         // Add pack.mcmeta to the zip
-        byte[] packMCMetaData = "{\"pack\":{\"description\":\"\",\"pack_format\":46,\"supported_formats\":{\"max_inclusive\":55,\"min_inclusive\":42}}}".getBytes(StandardCharsets.UTF_8);
-        CRC32 packMCMetaCrc = new CRC32();
-        packMCMetaCrc.update(packMCMetaData);
-        ZipEntry packMCMetaEntry = new ZipEntry("pack.mcmeta");
-        packMCMetaEntry.setTime(0);
-        packMCMetaEntry.setSize(packMCMetaData.length);
-        packMCMetaEntry.setMethod(ZipEntry.DEFLATED);
-        packMCMetaEntry.setCrc(packMCMetaCrc.getValue());
-        entries.add(new ZipEntryData(packMCMetaEntry, packMCMetaData));
+        // Add overlays to the pack.mcmeta
+        byte[] packMCMetaData = getPackMCMetaData(overlays);
+        packConsumer.accept("pack.mcmeta", packMCMetaData);
 
         // Set to store unique elements we have already seen
         Set<String> seen = new HashSet<>();
@@ -649,6 +684,18 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         return false;
     }
 
+    private static byte @NotNull [] getPackMCMetaData(List<PackMCMeta.Overlays.Entry> overlays) {
+        StringBuilder stringBuilder = new StringBuilder("[");
+        for (int i = overlays.size() - 2; i != -1; --i) {
+            stringBuilder.append(overlays.get(i));
+            stringBuilder.append(',');
+        }
+        stringBuilder.append(overlays.getLast());
+        stringBuilder.append(']');
+        String overlaysStr = stringBuilder.toString();
+        return ("{\"pack\":{\"description\":\"\",\"pack_format\":46,\"supported_formats\":{\"max_inclusive\":256,\"min_inclusive\":42}}"+(overlaysStr.length()<4 ? "" : ",\"overlays\":{\"entries\":"+overlaysStr+"}")+"}").getBytes(StandardCharsets.UTF_8);
+    }
+
     public static void writePack(File file, List<ZipEntryData> entries) {
         if (entries.isEmpty())
             return;
@@ -669,11 +716,109 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         }
     }
 
-    public static void addAssetsFromZipEntries(Consumer<ZipEntryData> entryConsumer, ZipFile zipFile) throws IOException {
+    public record PackMCMeta(Pack pack, Overlays overlays) {
+        public record Pack(int pack_format, String description) {}
+        public record Overlays(Entry[] entries) {
+            public record Entry(String directory, FormatVersion formats) {
+                public record FormatVersion(int[] versions, Integer min, Integer max) {
+                    public FormatVersion(int[] versions, Integer min, Integer max) {
+                        this.versions = versions;
+                        this.min = min;
+                        this.max = max;
+                    }
+
+                    public FormatVersion(int[] versions) {
+                        this(versions, null, null);
+                    }
+
+                    public FormatVersion(int version) {
+                        this(new int[]{version}, null, null);
+                    }
+
+                    public FormatVersion(int min_inclusive, int max_inclusive) {
+                        this(new int[0], min_inclusive, max_inclusive);
+                    }
+
+                    @Override
+                    public @NotNull String toString() {
+                        if (min == null && max == null) {
+                            if (versions.length == 1) {
+                                return String.valueOf(versions[0]);
+                            }
+                            StringBuilder stringBuilder = new StringBuilder("[");
+                            for (int i = versions.length - 2; i != -1; --i) {
+                                stringBuilder.append(versions[i]);
+                                stringBuilder.append(',');
+                            }
+                            stringBuilder.append(versions[versions.length - 1]);
+                            stringBuilder.append(']');
+                            return stringBuilder.toString();
+                        }
+                        StringBuilder builder = new StringBuilder("{");
+                        if (min != null)
+                            builder.append("\"min_inclusive\":").append(min);
+                        if (max != null) {
+                            if (min != null)
+                                builder.append(',');
+                            builder.append("\"max_inclusive\":").append(max);
+                        }
+                        builder.append('}');
+                        return builder.toString();
+                    }
+
+                    public boolean valid() {
+                        return (this.min != null && this.max != null) || this.versions.length > 0;
+                    }
+                }
+
+                @Override
+                public @NotNull String toString() {
+                    return "{\"directory\":\""+directory+"\",\"formats\":"+formats+"}";
+                }
+            }
+        }
+    }
+    
+    public static class FormatVersionDeserializer implements JsonDeserializer<PackMCMeta.Overlays.Entry.FormatVersion> {
+        @Override
+        public PackMCMeta.Overlays.Entry.FormatVersion deserialize(JsonElement json, Type type, JsonDeserializationContext context) throws JsonParseException {
+            if (json.isJsonPrimitive() && json.getAsJsonPrimitive().isNumber()) {
+                return new PackMCMeta.Overlays.Entry.FormatVersion(json.getAsInt());
+            } else if (json.isJsonArray()) {
+                int[] versions = context.deserialize(json, int[].class);
+                return new PackMCMeta.Overlays.Entry.FormatVersion(versions);
+            } else if (json.isJsonObject()) {
+                JsonObject obj = json.getAsJsonObject();
+                int min = obj.get("min_inclusive").getAsInt();
+                int max = obj.get("max_inclusive").getAsInt();
+                return new PackMCMeta.Overlays.Entry.FormatVersion(min, max);
+            } else {
+                return new PackMCMeta.Overlays.Entry.FormatVersion(new int[0]);
+            }
+        }
+    }
+
+    public static void addAssetsFromZipEntries(Consumer<ZipEntryData> entryConsumer, Consumer<PackMCMeta.Overlays.Entry> overlayConsumer, ZipFile zipFile) throws IOException {
         Enumeration<? extends ZipEntry> zipEntries = zipFile.entries();
+        ZipEntry packMCMetaEntry = zipFile.getEntry("pack.mcmeta");
+        HashSet<String> allowDirectories = new HashSet<>(List.of("assets"));
+        if (packMCMetaEntry != null) {
+            try (InputStreamReader reader = new InputStreamReader(zipFile.getInputStream(packMCMetaEntry))) {
+                PackMCMeta meta = GSON.fromJson(reader, PackMCMeta.class);
+                if (meta.overlays() != null) {
+                    for (PackMCMeta.Overlays.Entry entry : meta.overlays().entries()) {
+                        if (!entry.formats().valid())
+                            continue;
+                        allowDirectories.add(entry.directory());
+                        overlayConsumer.accept(entry);
+                        //LOGGER.info(entry.directory() + " -> " + entry.formats());
+                    }
+                }
+            }
+        }
         while (zipEntries.hasMoreElements()) {
             ZipEntry zipEntry = zipEntries.nextElement();
-            if (!zipEntry.getName().startsWith("assets/") || zipEntry.isDirectory()) {
+            if (zipEntry.isDirectory() || !allowDirectories.contains(zipEntry.getName().split("/")[0])) {
                 continue;
             }
             try (InputStream is = zipFile.getInputStream(zipEntry)) {
@@ -694,5 +839,22 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         resourcePack = new ResourcePack();
         playerResourcePack = new PlayerResourcePack();
         ZIP_PACK_CALLBACKS = new ArrayList<>();
+        GSON = new GsonBuilder()
+                .registerTypeAdapter(PackMCMeta.Overlays.Entry.FormatVersion.class, new FormatVersionDeserializer())
+                .create();
+
+        arms = new byte[4][];
+        /// Classic Left Arm
+        arms[0] = """
+                {"texture_size":[64,64],"textures":{"skin":"dynamicrp:item/skin"},"elements":[{"from":[4.999,7.999,5.999],"to":[9.001,20.001,10.001],"rotation":{"angle":0,"axis":"y","origin":[8,8,8]},"faces":{"north":{"uv":[9,13,10,16],"texture":"#skin"},"east":{"uv":[8,13,9,16],"texture":"#skin"},"south":{"uv":[11,13,12,16],"texture":"#skin"},"west":{"uv":[10,13,11,16],"texture":"#skin"},"up":{"uv":[10,13,9,12],"texture":"#skin"},"down":{"uv":[11,12,10,13],"texture":"#skin"}}},{"from":[4.749,7.749,5.749],"to":[9.251,20.251,10.251],"rotation":{"angle":0,"axis":"y","origin":[8,8,8]},"faces":{"north":{"uv":[13,13,14,16],"texture":"#skin"},"east":{"uv":[12,13,13,16],"texture":"#skin"},"south":{"uv":[15,13,16,16],"texture":"#skin"},"west":{"uv":[14,13,15,16],"texture":"#skin"},"up":{"uv":[14,13,13,12],"texture":"#skin"},"down":{"uv":[15,12,14,13],"texture":"#skin"}}},{"from":[9.243,20.251,10.251],"to":[4.741,7.749,5.749],"rotation":{"angle":0,"axis":"z","origin":[8,8,8]},"faces":{"north":{"uv":[16,13,15,16],"rotation":180,"texture":"#skin"},"east":{"uv":[15,13,14,16],"rotation":180,"texture":"#skin"},"south":{"uv":[14,13,13,16],"rotation":180,"texture":"#skin"},"west":{"uv":[13,13,12,16],"rotation":180,"texture":"#skin"},"up":{"uv":[14,12,15,13],"texture":"#skin"},"down":{"uv":[13,13,14,12],"texture":"#skin"}}}]}""".getBytes(StandardCharsets.UTF_8);
+        /// Slim Left Arm
+        arms[1] = """
+                {"texture_size":[64,64],"textures":{"skin":"dynamicrp:item/skin"},"elements":[{"from":[5.999,7.999,5.999],"to":[9.001,20.001,10.001],"rotation":{"angle":0,"axis":"y","origin":[8,8,8]},"faces":{"north":{"uv":[9,13,9.75,16],"texture":"#skin"},"east":{"uv":[8,13,9,16],"texture":"#skin"},"south":{"uv":[10.75,13,11.5,16],"texture":"#skin"},"west":{"uv":[9.75,13,10.75,16],"texture":"#skin"},"up":{"uv":[9.75,13,9,12],"texture":"#skin"},"down":{"uv":[10.5,12,9.75,13],"texture":"#skin"}}},{"from":[5.749,7.749,5.749],"to":[9.251,20.251,10.251],"rotation":{"angle":0,"axis":"y","origin":[8,8,8]},"faces":{"north":{"uv":[13,13,13.75,16],"texture":"#skin"},"east":{"uv":[12,13,13,16],"texture":"#skin"},"south":{"uv":[14.75,13,15.5,16],"texture":"#skin"},"west":{"uv":[13.75,13,14.75,16],"texture":"#skin"},"up":{"uv":[13.75,13,13,12],"texture":"#skin"},"down":{"uv":[14.5,12,13.75,13],"texture":"#skin"}}},{"from":[9.239,20.251,10.251],"to":[5.737,7.749,5.749],"rotation":{"angle":0,"axis":"z","origin":[16,8,8]},"faces":{"north":{"uv":[15.5,13,14.75,16],"rotation":180,"texture":"#skin"},"east":{"uv":[14.75,13,13.75,16],"rotation":180,"texture":"#skin"},"south":{"uv":[13.75,13,13,16],"rotation":180,"texture":"#skin"},"west":{"uv":[13,13,12,16],"rotation":180,"texture":"#skin"},"up":{"uv":[13.75,12,14.5,13],"texture":"#skin"},"down":{"uv":[13,13,13.75,12],"texture":"#skin"}}}]}""".getBytes(StandardCharsets.UTF_8);
+        /// Classic Right Arm
+        arms[2] = """
+                {"texture_size":[64,64],"textures":{"skin":"dynamicrp:item/skin"},"elements":[{"from":[6.999,7.999,5.999],"to":[11.001,20.001,10.001],"rotation":{"angle":0,"axis":"y","origin":[8,8,8]},"faces":{"north":{"uv":[11,5,12,8],"texture":"#skin"},"east":{"uv":[10,5,11,8],"texture":"#skin"},"south":{"uv":[13,5,14,8],"texture":"#skin"},"west":{"uv":[12,5,13,8],"texture":"#skin"},"up":{"uv":[12,5,11,4],"texture":"#skin"},"down":{"uv":[13,4,12,5],"texture":"#skin"}}},{"from":[6.749,7.749,5.749],"to":[11.251,20.251,10.251],"rotation":{"angle":0,"axis":"y","origin":[8,8,8]},"faces":{"north":{"uv":[11,9,12,12],"texture":"#skin"},"east":{"uv":[10,9,11,12],"texture":"#skin"},"south":{"uv":[13,9,14,12],"texture":"#skin"},"west":{"uv":[12,9,13,12],"texture":"#skin"},"up":{"uv":[12,9,11,8],"texture":"#skin"},"down":{"uv":[13,8,12,9],"texture":"#skin"}}},{"from":[11.243,20.251,10.251],"to":[6.741,7.749,5.749],"rotation":{"angle":0,"axis":"z","origin":[24,8,8]},"faces":{"north":{"uv":[14,9,13,12],"rotation":180,"texture":"#skin"},"east":{"uv":[13,9,12,12],"rotation":180,"texture":"#skin"},"south":{"uv":[12,9,11,12],"rotation":180,"texture":"#skin"},"west":{"uv":[11,9,10,12],"rotation":180,"texture":"#skin"},"up":{"uv":[12,8,13,9],"texture":"#skin"},"down":{"uv":[11,9,12,8],"texture":"#skin"}}}]}""".getBytes(StandardCharsets.UTF_8);
+        /// Slim Right Arm
+        arms[3] = """
+                {"texture_size":[64,64],"textures":{"skin":"dynamicrp:item/skin"},"elements":[{"from":[6.999,7.999,5.999],"to":[10.001,20.001,10.001],"rotation":{"angle":0,"axis":"y","origin":[8,8,8]},"faces":{"north":{"uv":[11,5,11.75,8],"texture":"#skin"},"east":{"uv":[10,5,11,8],"texture":"#skin"},"south":{"uv":[12.75,5,13.5,8],"texture":"#skin"},"west":{"uv":[11.75,5,12.75,8],"texture":"#skin"},"up":{"uv":[11.75,5,11,4],"texture":"#skin"},"down":{"uv":[12.5,4,11.75,5],"texture":"#skin"}}},{"from":[6.749,7.749,5.749],"to":[10.251,20.251,10.251],"rotation":{"angle":0,"axis":"y","origin":[8,8,8]},"faces":{"north":{"uv":[11,9,11.75,12],"texture":"#skin"},"east":{"uv":[10,9,11,12],"texture":"#skin"},"south":{"uv":[12.75,9,13.5,12],"texture":"#skin"},"west":{"uv":[11.75,9,12.75,12],"texture":"#skin"},"up":{"uv":[11.75,9,11,8],"texture":"#skin"},"down":{"uv":[12.5,8,11.75,9],"texture":"#skin"}}},{"from":[10.247,20.251,10.251],"to":[6.745,7.749,5.749],"rotation":{"angle":0,"axis":"z","origin":[15,8,8]},"faces":{"north":{"uv":[13.5,9,12.75,12],"rotation":180,"texture":"#skin"},"east":{"uv":[12.75,9,11.75,12],"rotation":180,"texture":"#skin"},"south":{"uv":[11.75,9,11,12],"rotation":180,"texture":"#skin"},"west":{"uv":[11,9,10,12],"rotation":180,"texture":"#skin"},"up":{"uv":[11.75,8,12.5,9],"texture":"#skin"},"down":{"uv":[11,9,11.75,8],"texture":"#skin"}}}]}""".getBytes(StandardCharsets.UTF_8);
     }
 }
