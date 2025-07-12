@@ -684,13 +684,15 @@ public final class DynamicRP extends JavaPlugin implements Listener {
         return false;
     }
 
-    private static byte @NotNull [] getPackMCMetaData(List<PackMCMeta.Overlays.Entry> overlays) {
+    private static byte @NotNull [] getPackMCMetaData(@NotNull List<PackMCMeta.Overlays.Entry> overlays) {
         StringBuilder stringBuilder = new StringBuilder("[");
-        for (int i = overlays.size() - 2; i != -1; --i) {
-            stringBuilder.append(overlays.get(i));
-            stringBuilder.append(',');
+        if (!overlays.isEmpty()) {
+            for (int i = overlays.size() - 2; i != -1; --i) {
+                stringBuilder.append(overlays.get(i));
+                stringBuilder.append(',');
+            }
+            stringBuilder.append(overlays.getLast());
         }
-        stringBuilder.append(overlays.getLast());
         stringBuilder.append(']');
         String overlaysStr = stringBuilder.toString();
         return ("{\"pack\":{\"description\":\"\",\"pack_format\":46,\"supported_formats\":{\"max_inclusive\":256,\"min_inclusive\":42}}"+(overlaysStr.length()<4 ? "" : ",\"overlays\":{\"entries\":"+overlaysStr+"}")+"}").getBytes(StandardCharsets.UTF_8);
