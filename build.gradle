@@ -1,5 +1,6 @@
 plugins {
     id 'java'
+    id("io.papermc.paperweight.userdev") version "${paperweight_version}"
 }
 
 group = 'de.cjdev'
@@ -26,6 +27,7 @@ repositories {
 */
 
 dependencies {
+    paperweight.paperDevBundle("${minecraft_version}-R0.1-SNAPSHOT")
     compileOnly("io.papermc.paper:paper-api:${minecraft_version}-R0.1-SNAPSHOT")
 }
 
@@ -49,10 +51,11 @@ tasks.withType(JavaCompile).configureEach {
 
 jar {
     destinationDirectory.set(file("C:/Minecraft Servers/Paper Plugin Test Server/plugins"))
+    archiveFileName = "${getArchiveBaseName().get()}-${getArchiveVersion().get()}+${minecraft_version}.${getArchiveExtension().get()}"
 }
 
 processResources {
-    def props = [version: version]
+    def props = [version: version, api_version: api_version]
     inputs.properties props
     filteringCharset 'UTF-8'
     filesMatching('paper-plugin.yml') {

@@ -1,7 +1,8 @@
 name: DynamicRP
 version: "${version}"
-main: de.cjdev.dynamicrp.DynamicRP
-api-version: '1.21'
+main: de.cjdev.dynamicrp.DynamicRPPlugin
+bootstrapper: de.cjdev.dynamicrp.DynamicRP
+api-version: "${api_version}"
 load: STARTUP
 authors: [ CJDev ]
 description: A Plugin designed to make Dynamic Resource Packs easy
