@@ -167,7 +167,12 @@ public final class DynamicRP implements PluginBootstrap {
                     }
                 });
                 return 1;
-            }).build()).build();
+            })).then(Commands.literal("reload").executes(ctx -> {
+                StopWebServer();
+                loadConfig();
+                StartWebServer();
+                return 1;
+            })).build();
             event.registrar().register(pluginCommand);
             event.registrar().register(Commands.literal("drp").redirect(pluginCommand).build());
         });
@@ -296,6 +301,7 @@ public final class DynamicRP implements PluginBootstrap {
             httpServer.createContext("/", new RequestHandler());
 
             httpServer.start();
+            webServerPort = httpServer.getAddress().getPort();
             LOGGER.info("\u001B[38;2;85;255;85mStarted Web Server on {}\u001B[0m", httpServer.getAddress().getPort());
         } catch (BindException e) {
             LOGGER.warn("\u001B[38;2;255;85;85mAddress already in use. Restart the Server after Fix\u001B[0m");
