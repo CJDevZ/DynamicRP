@@ -22,6 +22,8 @@ import net.kyori.adventure.resource.ResourcePackRequest;
 import net.kyori.adventure.text.logger.slf4j.ComponentLogger;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.packs.OverlayMetadataSection;
+import net.minecraft.server.packs.PackType;
+import net.minecraft.server.packs.metadata.pack.PackFormat;
 import net.minecraft.server.packs.metadata.pack.PackMetadataSection;
 import net.minecraft.server.packs.resources.ResourceMetadata;
 import net.minecraft.util.InclusiveRange;
@@ -139,6 +141,7 @@ public final class DynamicRP implements PluginBootstrap {
 
         try (Writer configWriter = Files.newBufferedWriter(configPath, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
             configWriter.write("""
+                    auto-zip: true
                     webserver:
                       port: 0
                     required: true
@@ -393,7 +396,7 @@ public final class DynamicRP implements PluginBootstrap {
     }
 
     public static void writePlayerResourcePack(Player player, PackByteWriter writer) throws IOException {
-        var pack = new PackMCMeta(new PackMetadataSection(Component.literal("DynamicRP Generated Player Resources"), 46, Optional.of(new InclusiveRange<>(46, 64))), new OverlayMetadataSection(Collections.emptyList())).encode();
+        var pack = new PackMCMeta(new PackMetadataSection(Component.literal("DynamicRP Generated Player Resources"), new InclusiveRange<>(PackFormat.of(65, 0), PackFormat.of(999))), new OverlayMetadataSection(Collections.emptyList())).encode();
         writer.writeString("pack.mcmeta", pack.toString());
 
         try {
@@ -480,7 +483,7 @@ public final class DynamicRP implements PluginBootstrap {
             // Add pack.mcmeta to the pack
             // Add overlays
             JsonElement packMCMeta = new PackMCMeta(
-                    new PackMetadataSection(Component.literal("DynamicRP Generated Resource Pack"), 46, Optional.of(new InclusiveRange<>(46, 64))),
+                    new PackMetadataSection(Component.literal("DynamicRP Generated Resource Pack"), new InclusiveRange<>(PackFormat.of(65, 0), PackFormat.of(999))),
                     overlays).encode();
             writer.writeString("pack.mcmeta", packMCMeta.toString());
         } catch (Exception e) {
@@ -498,8 +501,8 @@ public final class DynamicRP implements PluginBootstrap {
 
     public record PackMCMeta(PackMetadataSection pack, OverlayMetadataSection overlays) {
         public static final Codec<PackMCMeta> CODEC = RecordCodecBuilder.create(instance -> instance
-                .group(PackMetadataSection.CODEC.fieldOf("pack").forGetter(PackMCMeta::pack),
-                        OverlayMetadataSection.TYPE.codec().fieldOf("overlays").forGetter(PackMCMeta::overlays))
+                .group(PackMetadataSection.forPackType(PackType.CLIENT_RESOURCES).codec().fieldOf("pack").forGetter(PackMCMeta::pack),
+                        OverlayMetadataSection.codecForPackType(PackType.CLIENT_RESOURCES).fieldOf("overlays").forGetter(PackMCMeta::overlays))
                 .apply(instance, PackMCMeta::new));
 
         public JsonElement encode() {
@@ -513,7 +516,7 @@ public final class DynamicRP implements PluginBootstrap {
         try (var inputStream = Files.newInputStream(rootPath.resolve("pack.mcmeta"))) {
             var resourceMetaData = ResourceMetadata.fromJsonStream(inputStream);
 
-            resourceMetaData.getSection(OverlayMetadataSection.TYPE).ifPresent(section -> {
+            resourceMetaData.getSection(OverlayMetadataSection.forPackType(PackType.CLIENT_RESOURCES)).ifPresent(section -> {
                 for (var entry : section.overlays()) {
                     // Add overlay directory for filtering later
                     allowDirectories.add(entry.overlay());
