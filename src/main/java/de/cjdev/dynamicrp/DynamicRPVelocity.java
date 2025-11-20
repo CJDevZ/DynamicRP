@@ -2,6 +2,7 @@ package de.cjdev.dynamicrp;
 
 import com.google.inject.Inject;
 import com.moandjiezana.toml.Toml;
+import com.moandjiezana.toml.TomlWriter;
 import com.mojang.brigadier.tree.LiteralCommandNode;
 import com.sun.net.httpserver.HttpServer;
 import com.velocitypowered.api.command.BrigadierCommand;
@@ -9,10 +10,8 @@ import com.velocitypowered.api.command.CommandManager;
 import com.velocitypowered.api.command.CommandMeta;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
-import com.velocitypowered.api.event.player.PlayerChatEvent;
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent;
 import com.velocitypowered.api.event.player.ServerResourcePackSendEvent;
-import com.velocitypowered.api.event.proxy.ListenerCloseEvent;
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent;
@@ -35,11 +34,10 @@ public class DynamicRPVelocity {
     static final HashMap<String, String> HOST_NAMES = new HashMap<>();
     static Logger LOGGER;
     private static Path dataDirectory;
-    private Toml config;
-    private static HttpServer httpServer;
-    static long webServerPort;
-    static String hostName;
-    static boolean useHostName;
+    public static Config CONFIG;
+    public static HttpServer httpServer;
+    public static int webServerPort;
+    public static boolean useExternalAddress;
     static String localIP;
     static String publicIP;
 
@@ -80,42 +78,33 @@ public class DynamicRPVelocity {
             Map<String, String> queryParams = mapGETQuery(url.getQuery());
             DynamicRPVelocity.HOST_NAMES.put(serverInfo.getName(), localHost + ":" + url.getPort());
             UUID userUUID = connection.getPlayer().getUniqueId();
-            String host = DynamicRPVelocity.useHostName ? DynamicRPVelocity.hostName : (localUsers.contains(userUUID) ? DynamicRPVelocity.localIP : DynamicRPVelocity.publicIP);
-            var newUrl = "http://" + host + ":" + DynamicRPVelocity.webServerPort + "?server=" + serverInfo.getName() + (queryParams.containsKey("uuid") ? "&uuid=" + userUUID.toString() : "");
+            String externalAddress = DynamicRPVelocity.useExternalAddress ? CONFIG.externalAddress() : (localUsers.contains(userUUID) ? DynamicRPVelocity.localIP : DynamicRPVelocity.publicIP);
+            var newUrl = "http://" + externalAddress + ":" + DynamicRPVelocity.webServerPort + "?server=" + serverInfo.getName() + (queryParams.containsKey("uuid") ? "&uuid=" + userUUID.toString() : "");
             event.setProvidedResourcePack(event.getReceivedResourcePack().asBuilder(newUrl).build());
         } catch (MalformedURLException ignored) {
         }
     }
 
     private void loadConfig() {
-        if (!Files.exists(dataDirectory)) {
-            try {
-                Files.createDirectories(dataDirectory);
+        File configFile = dataDirectory.resolve("config.toml").toFile();
+        try {
+            Files.createDirectories(dataDirectory);
+            if (!configFile.exists()) {
+                configFile.createNewFile();
+            }
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        var config = new Toml().read(configFile).to(Config.class);
+        CONFIG = Config.DEFAULT.overlay(config);
+        if (!config.equals(CONFIG)) {
+            try (FileWriter writer = new FileWriter(configFile)) {
+               writer.write(new TomlWriter().write(CONFIG));
             } catch (IOException e) {
-                e.printStackTrace();
+                LOGGER.error("Could not write config to toml", e);
             }
         }
-
-        Path configFile = dataDirectory.resolve("config.toml");
-        if (!Files.exists(configFile)) {
-            try {
-                Files.writeString(configFile, "[webserver]\nport = -1\nhostName = \"0.0.0.0\"");
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-
-        this.config = (new Toml()).read(configFile.toFile());
-        Toml webServer = this.config.getTable("webserver");
-        if (webServer == null) {
-            webServerPort = -1L;
-            hostName = "0.0.0.0";
-            useHostName = false;
-        } else {
-            webServerPort = webServer.getLong("port");
-            hostName = webServer.getString("hostName");
-            useHostName = hostName != null && !hostName.equals("0.0.0.0");
-        }
+        useExternalAddress = !CONFIG.externalAddress().isBlank();
     }
 
     @Subscribe
@@ -155,15 +144,6 @@ public class DynamicRPVelocity {
         return publicIP;
     }
 
-    private static int getFreePort() {
-        try (ServerSocket socket = new ServerSocket(0, 0, InetAddress.getByName("0.0.0.0"))) {
-            return socket.getLocalPort();
-        } catch (Exception e) {
-            e.printStackTrace();
-            return -1;
-        }
-    }
-
     private void StartWebServer() {
         try {
             publicIP = getPublicIP();
@@ -183,12 +163,14 @@ public class DynamicRPVelocity {
                 }
             }
 
-            webServerPort = webServerPort >= 0L && webServerPort <= 65535L ? webServerPort : (long)getFreePort();
-            httpServer = HttpServer.create(new InetSocketAddress(hostName, (int)webServerPort), 0);
+            webServerPort = CONFIG.port();
+            webServerPort = webServerPort < 0L || webServerPort > 65535L ? 0 : webServerPort;
+            httpServer = HttpServer.create(new InetSocketAddress(CONFIG.hostName(), webServerPort), 0);
             httpServer.createContext("/", new RequestHandler());
             httpServer.start();
-            LOGGER.info("\u001b[38;2;85;255;85mStarted Web Server on {}\u001b[0m", httpServer.getAddress().getPort());
-        } catch (BindException var5) {
+            webServerPort = httpServer.getAddress().getPort();
+            LOGGER.info("\u001b[38;2;85;255;85mStarted Web Server ({})\u001b[0m", httpServer.getAddress());
+        } catch (BindException e) {
             LOGGER.warn("\u001b[38;2;255;85;85mAddress already in use. Restart the Server after Fix\u001b[0m");
         } catch (IOException e) {
             throw new RuntimeException(e);
