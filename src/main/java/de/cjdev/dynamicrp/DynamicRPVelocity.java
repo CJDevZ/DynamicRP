@@ -79,8 +79,19 @@ public class DynamicRPVelocity {
             DynamicRPVelocity.HOST_NAMES.put(serverInfo.getName(), localHost + ":" + url.getPort());
             UUID userUUID = connection.getPlayer().getUniqueId();
             String externalAddress = DynamicRPVelocity.useExternalAddress ? CONFIG.externalAddress() : (localUsers.contains(userUUID) ? DynamicRPVelocity.localIP : DynamicRPVelocity.publicIP);
-            var newUrl = "http://" + externalAddress + ":" + DynamicRPVelocity.webServerPort + "?server=" + serverInfo.getName() + (queryParams.containsKey("uuid") ? "&uuid=" + userUUID.toString() : "");
-            event.setProvidedResourcePack(event.getReceivedResourcePack().asBuilder(newUrl).build());
+            var newUrl = new StringBuilder()
+                    .append("http://")
+                    .append(externalAddress)
+                    .append(':')
+                    .append(DynamicRPVelocity.webServerPort)
+                    .append("?server=")
+                    .append(URLEncoder.encode(serverInfo.getName(), StandardCharsets.UTF_8));
+
+            if (queryParams.containsKey("uuid")) {
+                newUrl.append("&uuid=")
+                        .append(URLEncoder.encode(queryParams.get("uuid"), StandardCharsets.UTF_8));
+            }
+            event.setProvidedResourcePack(event.getReceivedResourcePack().asBuilder(newUrl.toString()).build());
         } catch (MalformedURLException ignored) {
         }
     }
@@ -98,8 +109,8 @@ public class DynamicRPVelocity {
         var config = new Toml().read(configFile).to(Config.class);
         CONFIG = Config.DEFAULT.overlay(config);
         if (!config.equals(CONFIG)) {
-            try (FileWriter writer = new FileWriter(configFile)) {
-               writer.write(new TomlWriter().write(CONFIG));
+            try {
+               new TomlWriter().write(CONFIG, configFile);
             } catch (IOException e) {
                 LOGGER.error("Could not write config to toml", e);
             }
